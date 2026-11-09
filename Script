@@ -1,0 +1,114 @@
+local input_text = [[
+EMAIL:MAC:RID:WK:TOKEN:PLATFORM
+]]
+
+-- ============================================================================
+-- CONFIG
+-- ============================================================================
+local min_reconnect_interval = 15
+local max_reconnect_interval = 25
+local delay_add              = 0
+socks_bypass = false
+
+-- ============================================================================
+-- PARSER
+-- ============================================================================
+--- Parse satu baris jadi tabel { email, token, mac, rid, wk, platform }
+--- Format: email:mac1:mac2:mac3:mac4:mac5:mac6:rid:wk:token:platform
+--- Pemisah setelah email boleh ":" atau "|".
+--- Platform: 0 = Windows, 2 = macOS. Kalau gak ditulis, dianggap Windows.
+---@param line string
+---@return table|nil
+local function parse_line(line)
+    local email, rest = line:match("^([^|:]+)[|:](.+)$")
+    if not email or not rest then
+        return nil
+    end
+
+    local seg = {}
+    for s in string.gmatch(rest, "([^:]+)") do
+        seg[#seg + 1] = s
+    end
+
+    -- Butuh minimal 9 bagian: 6 MAC + rid + wk + token
+    if #seg < 9 then
+        return nil
+    end
+
+    -- Kalau ada bagian ke-10, yang terakhir itu kode platform
+    local platform = 0
+    if #seg >= 10 then
+        platform = tonumber(seg[#seg])
+        if platform ~= 0 and platform ~= 2 then
+            print("[LOGIN] Skip " .. email .. ": platform harus 0 atau 2")
+            return nil
+        end
+        seg[#seg] = nil
+    end
+
+    local mac   =table.concat({ seg[1], seg[2], seg[3], seg[4], seg[5], seg[6] }, ":")
+    local rid   = seg[7]
+    local wk    = seg[8]
+    -- token digabung ulang biar aman kalau ada ':' (base64 sebenarnya gak ada)
+    local token = table.concat(seg, ":", 9)
+
+    return {
+        email = email,
+        token = token,
+        mac   = mac,
+        rid   = rid,
+        wk    = wk,
+        platform = platform,
+    }
+end
+
+-- ============================================================================
+-- BOT LOGIN
+-- ============================================================================
+--- Tambah satu akun ke Lucifer dan pasang setting-nya.
+---@param data table
+local function add_account(data)
+    local information = {
+        ["display"]  = data.email,
+        ["secret"]   = data.email,
+        ["name"]     = data.token,
+        ["mac"]      = data.mac,
+        ["rid"]      = data.rid,
+        ["wk"]       = data.wk,
+        ["platform"] = data.platform,
+    }
+    local bot = addBot(information)
+
+    -- addBot bisa balikin nil, kemungkinan karena bot udah ada di list
+    if not bot then
+        print("[LOGIN] Skip " .. data.email .. ": addBot balikin nil, kemungkinan bot udah ada di list")
+        return
+    end
+
+    local platform_name = data.platform == 2 and "macOS" or "Windows"
+    print("[LOGIN] " .. data.email .. " -> " .. platform_name .. " (platform=" .. data.platform .. ")")
+
+    -- Reconnect config
+    bot.min_reconnect = min_reconnect_interval
+    bot.max_reconnect = max_reconnect_interval
+    bot:getConsole().enabled = true
+
+    -- Login settings
+    bot.bypass_logon = socks_bypass
+
+    if delay_add > 0 then
+        sleep(delay_add)
+    end
+end
+
+for line in string.gmatch(input_text, "([^\r\n]+)") do
+    local data = parse_line(line)
+
+    if data then
+        -- pcall biar satu akun error gak matiin script
+        local ok, err = pcall(add_account, data)
+        if not ok then
+            print("[LOGIN] Skip " .. data.email .. ": " .. tostring(err))
+        end
+    end
+end
